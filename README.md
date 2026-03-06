@@ -70,6 +70,7 @@ To disable Vercel Deployment Protection for testing:
 ## 8) Styling
 
 - UI uses Tailwind utility classes (loaded via Tailwind Play CDN in `app/layout.tsx`) to render the dashboard cards, ranking list, and table layouts.
+<<<<<<< codex/create-admin-panel-with-google-login-iy0usf
 
 
 ## 9) OAuth button troubleshooting
@@ -83,3 +84,5 @@ If the **Continue with Google** button does not redirect:
    - `https://<your-domain>/auth/callback`
 4. In Supabase Auth → Providers → Google, ensure Google provider is enabled and credentials are valid.
 
+=======
+>>>>>>> main

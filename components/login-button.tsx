@@ -1,5 +1,6 @@
 'use client'
 
+<<<<<<< codex/create-admin-panel-with-google-login-iy0usf
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/browser'
 
@@ -55,5 +56,26 @@ export function LoginButton() {
         <p className="max-w-lg rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{errorMessage}</p>
       ) : null}
     </div>
+=======
+import { createClient } from '@/lib/supabase/browser'
+
+export function LoginButton() {
+  const signInWithGoogle = async () => {
+    const supabase = createClient()
+    const origin = window.location.origin
+
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${origin}/auth/callback`
+      }
+    })
+  }
+
+  return (
+    <button style={{ background: '#111', color: '#fff' }} onClick={signInWithGoogle}>
+      Continue with Google
+    </button>
+>>>>>>> main
   )
 }
