@@ -31,12 +31,20 @@ npm run dev
 
 ## 4) Access rules
 
-- Every route is protected by middleware.
+- Every app route is protected.
 - Unauthenticated users are redirected to `/login`.
 - Authenticated users must have `profiles.is_superadmin = true`.
 - Non-superadmins are redirected to `/unauthorized`.
 
-## 5) SQL to grant superadmin for testing
+## 5) Dashboard sections
+
+The home dashboard contains three management sections:
+
+- **Users**: Read-only table of all rows from `profiles`.
+- **Images**: View all images, create image rows, edit `description`, and delete rows from `images`.
+- **Captions**: Read-only list of all rows from `captions`.
+
+## 6) SQL to grant superadmin for testing
 
 Run in Supabase SQL Editor (replace with your email):
 
@@ -50,11 +58,10 @@ where id = (
 );
 ```
 
-## 6) Vercel deployment protection
+## 7) Vercel deployment protection
 
 To disable Vercel Deployment Protection for testing:
 
 1. Open your Vercel project.
 2. Go to **Settings → Deployment Protection**.
 3. Disable protection for the environment you're testing (usually Preview).
-
