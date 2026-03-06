@@ -1,8 +1,16 @@
-import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { LoginButton } from '@/components/login-button'
 
 type GenericRow = Record<string, unknown>
+
+type TopCaption = {
+  captionId: string
+  content: string
+  imageId: string
+  imageUrl: string
+  votes: number
+}
 
 function asText(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -18,62 +26,9 @@ function getValue(row: GenericRow, keys: string[]): unknown {
   return undefined
 }
 
-function tableColumns(rows: GenericRow[], preferred: string[]) {
-  const discovered = new Set<string>()
-  for (const row of rows) {
-    Object.keys(row).forEach((key) => discovered.add(key))
-  }
-
-  const inPreferred = preferred.filter((key) => discovered.has(key))
-  const remaining = [...discovered].filter((key) => !inPreferred.includes(key)).sort((a, b) => a.localeCompare(b))
-
-  return [...inPreferred, ...remaining]
-}
-
-async function createImage(formData: FormData) {
-  'use server'
-  const supabase = createClient()
-  const {
-    data: { user }
-  } = await supabase.auth.getUser()
-
-  if (!user) redirect('/login')
-
-  const url = String(formData.get('url') ?? '').trim()
-  const description = String(formData.get('description') ?? '').trim()
-
-  if (!url) return
-
-  await supabase.from('images').insert({
-    url,
-    description,
-    user_id: user.id
-  })
-
-  revalidatePath('/')
-}
-
-async function updateImageDescription(formData: FormData) {
-  'use server'
-  const supabase = createClient()
-  const id = String(formData.get('id') ?? '').trim()
-  const description = String(formData.get('description') ?? '').trim()
-
-  if (!id) return
-
-  await supabase.from('images').update({ description }).eq('id', id)
-  revalidatePath('/')
-}
-
-async function deleteImage(formData: FormData) {
-  'use server'
-  const supabase = createClient()
-  const id = String(formData.get('id') ?? '').trim()
-
-  if (!id) return
-
-  await supabase.from('images').delete().eq('id', id)
-  revalidatePath('/')
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}…`
 }
 
 async function signOut() {
@@ -83,11 +38,82 @@ async function signOut() {
   redirect('/login')
 }
 
+function MetricCard({
+  title,
+  value,
+  subtitle,
+  icon,
+  gradient
+}: {
+  title: string
+  value: string
+  subtitle: string
+  icon: React.ReactNode
+  gradient: string
+}) {
+  return (
+    <article className={`rounded-2xl border border-white/40 ${gradient} p-5 shadow-lg backdrop-blur`}>
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-sm font-medium text-slate-700">{title}</p>
+        <span className="rounded-xl bg-white/80 p-2 text-slate-700 shadow">{icon}</span>
+      </div>
+      <p className="text-4xl font-bold tracking-tight text-slate-900">{value}</p>
+      <p className="mt-2 text-sm text-slate-600">{subtitle}</p>
+    </article>
+  )
+}
+
+function SimpleBarChart({ data }: { data: TopCaption[] }) {
+  const maxVotes = Math.max(...data.map((item) => item.votes), 1)
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold text-slate-900">Top 5 Most Upvoted Captions</h3>
+        <p className="text-sm text-slate-500">Vote count by caption text (truncated)</p>
+      </div>
+
+      <div className="space-y-3">
+        {data.length === 0 ? (
+          <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">No caption vote data available yet.</p>
+        ) : (
+          data.map((item) => (
+            <div key={item.captionId} className="grid grid-cols-[1fr_auto] items-center gap-3">
+              <div>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">{truncate(item.content || 'Untitled caption', 42)}</p>
+                <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-blue-500"
+                    style={{ width: `${(item.votes / maxVotes) * 100}%` }}
+                  />
+                </div>
+              </div>
+              <span className="rounded-full bg-indigo-100 px-3 py-1 text-sm font-bold text-indigo-700">{item.votes}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default async function Home() {
   const supabase = createClient()
   const {
     data: { user }
   } = await supabase.auth.getUser()
+
+  if (!user) {
+    return (
+      <main className="mx-auto mt-16 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center shadow">
+        <h1 className="text-2xl font-bold">Sign In Required</h1>
+        <p className="mt-2 text-slate-600">Please continue with Google to access the admin dashboard.</p>
+        <div className="mt-6 flex justify-center">
+          <LoginButton />
+        </div>
+      </main>
+    )
+  }
 
   const [profilesRes, imagesRes, captionsRes, votesRes] = await Promise.all([
     supabase.from('profiles').select('*'),
@@ -101,6 +127,13 @@ export default async function Home() {
   const captionRows = (captionsRes.data ?? []) as GenericRow[]
   const voteRows = (votesRes.data ?? []) as GenericRow[]
 
+  const imageUrlById = imageRows.reduce<Record<string, string>>((acc, image) => {
+    const id = asText(getValue(image, ['id', 'image_id']))
+    const url = asText(getValue(image, ['url', 'image_url']))
+    if (id) acc[id] = url
+    return acc
+  }, {})
+
   const totalUsers = profileRows.length
   const totalImages = imageRows.length
   const averageCaptionsPerImage = totalImages > 0 ? captionRows.length / totalImages : 0
@@ -112,24 +145,22 @@ export default async function Home() {
     return acc
   }, {})
 
-  const topCaptions = captionRows
+  const topCaptions: TopCaption[] = captionRows
     .map((caption) => {
       const captionId = asText(getValue(caption, ['id', 'caption_id', 'captionId']))
       const content = asText(getValue(caption, ['content', 'caption', 'text', 'body']))
       const imageId = asText(getValue(caption, ['image_id', 'imageId']))
+
       return {
         captionId,
         content,
         imageId,
+        imageUrl: imageUrlById[imageId] ?? '',
         votes: voteCountByCaptionId[captionId] ?? 0
       }
     })
     .sort((a, b) => b.votes - a.votes)
     .slice(0, 5)
-
-  const profileColumns = tableColumns(profileRows, ['id', 'email', 'is_superadmin', 'created_at'])
-  const imageColumns = tableColumns(imageRows, ['id', 'url', 'description', 'user_id', 'created_at'])
-  const captionColumns = tableColumns(captionRows, ['id', 'image_id', 'author_id', 'content', 'created_at'])
 
   const errors = [
     profilesRes.error && `profiles: ${profilesRes.error.message}`,
@@ -139,217 +170,112 @@ export default async function Home() {
   ].filter(Boolean) as string[]
 
   return (
-    <main className="mx-auto my-8 w-[95%] max-w-7xl rounded-2xl border border-slate-200 bg-white/80 p-6 shadow-xl backdrop-blur-sm">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-sm uppercase tracking-[0.2em] text-violet-600">The Humor Project</p>
-          <h1 className="text-3xl font-bold text-slate-900">Admin Statistics Dashboard</h1>
-          <p className="text-slate-600">Signed in as {user?.email ?? 'Unknown user'}.</p>
+    <div className="min-h-screen bg-slate-100">
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex w-[95%] max-w-7xl items-center justify-between py-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">The Humor Project Admin</h1>
+            <p className="text-sm text-slate-600">Welcome back, {user.email ?? 'Admin'} 👋</p>
+          </div>
+          <form action={signOut}>
+            <button className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-700" type="submit">
+              Sign Out
+            </button>
+          </form>
         </div>
-        <form action={signOut}>
-          <button className="rounded-lg bg-rose-600 px-4 py-2 font-semibold text-white hover:bg-rose-700" type="submit">
-            Sign out
-          </button>
-        </form>
-      </div>
+      </header>
 
-      {errors.length > 0 && (
-        <section className="mb-6 rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-800">
-          <h2 className="text-lg font-semibold">Query diagnostics</h2>
-          <p className="mb-2 text-sm">Some dashboard queries failed. This is usually a schema mismatch or RLS issue.</p>
-          <ul className="list-disc space-y-1 pl-5 text-sm">
-            {errors.map((error) => (
-              <li key={error}>{error}</li>
-            ))}
-          </ul>
+      <main className="mx-auto w-[95%] max-w-7xl py-8">
+        {errors.length > 0 && (
+          <section className="mb-6 rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-800">
+            <h2 className="text-lg font-semibold">Data diagnostics</h2>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+              {errors.map((error) => (
+                <li key={error}>{error}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <MetricCard
+            title="Total Users"
+            value={String(totalUsers)}
+            subtitle="Profiles in the workspace"
+            gradient="bg-gradient-to-br from-indigo-100 to-blue-100"
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="8.5" cy="7" r="4" />
+                <path d="M20 8v6" />
+                <path d="M23 11h-6" />
+              </svg>
+            }
+          />
+          <MetricCard
+            title="Total Images"
+            value={String(totalImages)}
+            subtitle="Assets uploaded"
+            gradient="bg-gradient-to-br from-sky-100 to-cyan-100"
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="m21 15-5-5L5 21" />
+              </svg>
+            }
+          />
+          <MetricCard
+            title="Avg Captions / Image"
+            value={averageCaptionsPerImage.toFixed(2)}
+            subtitle="Caption density score"
+            gradient="bg-gradient-to-br from-violet-100 to-fuchsia-100"
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 3v18h18" />
+                <path d="m19 9-5 5-4-4-3 3" />
+              </svg>
+            }
+          />
         </section>
-      )}
 
-      <section className="mb-8 grid gap-4 md:grid-cols-3">
-        <article className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 p-5 text-white shadow-lg">
-          <p className="text-sm uppercase tracking-wide text-indigo-100">Total Users</p>
-          <p className="mt-2 text-4xl font-bold">{totalUsers}</p>
-        </article>
-        <article className="rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 p-5 text-white shadow-lg">
-          <p className="text-sm uppercase tracking-wide text-cyan-100">Total Images</p>
-          <p className="mt-2 text-4xl font-bold">{totalImages}</p>
-        </article>
-        <article className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 p-5 text-white shadow-lg">
-          <p className="text-sm uppercase tracking-wide text-emerald-100">Avg Captions / Image</p>
-          <p className="mt-2 text-4xl font-bold">{averageCaptionsPerImage.toFixed(2)}</p>
-        </article>
-      </section>
+        <section className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+          <SimpleBarChart data={topCaptions} />
 
-      <section className="mb-10 rounded-xl border border-amber-200 bg-amber-50 p-4">
-        <h2 className="text-xl font-semibold text-amber-900">Top 5 Most Upvoted Captions</h2>
-        <p className="mb-4 text-sm text-amber-800">Ranked by vote count from the caption_votes table.</p>
-        <div className="grid gap-3">
-          {topCaptions.length === 0 ? (
-            <p className="rounded-lg bg-white p-3 text-slate-600">No caption votes found yet.</p>
-          ) : (
-            topCaptions.map((caption, index) => (
-              <article
-                key={`${caption.captionId}-${index}`}
-                className="flex flex-wrap items-start justify-between gap-3 rounded-lg bg-white p-4 shadow-sm"
-              >
-                <div>
-                  <p className="font-semibold text-slate-800">
-                    #{index + 1} · Caption ID: {caption.captionId || 'n/a'}
-                  </p>
-                  <p className="mt-1 text-slate-700">{caption.content || '(empty caption)'}</p>
-                  <p className="mt-1 text-xs text-slate-500">Image: {caption.imageId || 'n/a'}</p>
-                </div>
-                <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-bold text-amber-800">{caption.votes} votes</span>
-              </article>
-            ))
-          )}
-        </div>
-      </section>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-900">Top Captions Gallery</h3>
+            <p className="mb-4 text-sm text-slate-500">Best performing captions with image previews</p>
 
-      <section className="mb-8">
-        <h2 className="mb-2 text-xl font-semibold">Users (profiles)</h2>
-        <p className="mb-3 text-slate-600">Read-only view of all rows in the profiles table.</p>
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full bg-white text-sm">
-            <thead className="bg-slate-100 text-left text-slate-700">
-              <tr>
-                {profileColumns.map((column) => (
-                  <th key={column} className="px-3 py-2">
-                    {column}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {profileRows.map((profile, index) => (
-                <tr key={asText(profile.id) || index} className="border-t border-slate-200">
-                  {profileColumns.map((column) => (
-                    <td key={`${asText(profile.id)}-${column}`} className="max-w-[350px] px-3 py-2 align-top">
-                      <div className="truncate" title={asText(profile[column])}>
-                        {asText(profile[column])}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-1">
+              {topCaptions.length === 0 ? (
+                <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">No top captions yet. Votes will appear here automatically.</p>
+              ) : (
+                topCaptions.map((caption) => (
+                  <article key={caption.captionId} className="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                    <div className="absolute right-3 top-3 rounded-full bg-slate-900 px-3 py-1 text-xs font-bold text-white shadow">
+                      {caption.votes} votes
+                    </div>
+
+                    {caption.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img alt="Caption related" className="h-40 w-full object-cover" src={caption.imageUrl} />
+                    ) : (
+                      <div className="flex h-40 w-full items-center justify-center bg-gradient-to-br from-slate-200 to-slate-300 text-slate-500">
+                        No image preview
                       </div>
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                    )}
 
-      <section className="mb-8">
-        <h2 className="mb-2 text-xl font-semibold">Images</h2>
-        <p className="mb-3 text-slate-600">View all images, add a new image URL, edit descriptions, and delete images.</p>
-
-        <form action={createImage} className="mb-5 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <input
-            className="rounded-md border border-slate-300 bg-white px-3 py-2"
-            name="url"
-            placeholder="https://example.com/image.jpg"
-            required
-          />
-          <textarea
-            className="rounded-md border border-slate-300 bg-white px-3 py-2"
-            name="description"
-            placeholder="Image description"
-            rows={3}
-          />
-          <button className="w-fit rounded-lg bg-slate-900 px-4 py-2 font-semibold text-white hover:bg-slate-700" type="submit">
-            Upload New Image
-          </button>
-        </form>
-
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full bg-white text-sm">
-            <thead className="bg-slate-100 text-left text-slate-700">
-              <tr>
-                {imageColumns.map((column) => (
-                  <th key={column} className="px-3 py-2">
-                    {column}
-                  </th>
-                ))}
-                <th className="px-3 py-2">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {imageRows.map((image, index) => {
-                const imageId = asText(getValue(image, ['id']))
-                const description = asText(getValue(image, ['description']))
-
-                return (
-                  <tr key={imageId || index} className="border-t border-slate-200 align-top">
-                    {imageColumns.map((column) => (
-                      <td key={`${imageId}-${column}`} className="max-w-[300px] px-3 py-2">
-                        <div className="truncate" title={asText(image[column])}>
-                          {column === 'url' ? (
-                            <a className="text-blue-700 underline" href={asText(image[column])} rel="noreferrer" target="_blank">
-                              {asText(image[column])}
-                            </a>
-                          ) : (
-                            asText(image[column])
-                          )}
-                        </div>
-                      </td>
-                    ))}
-                    <td className="px-3 py-2">
-                      <form action={updateImageDescription} className="mb-2 grid gap-2">
-                        <input name="id" type="hidden" value={imageId} />
-                        <textarea
-                          className="rounded-md border border-slate-300 bg-white px-2 py-1"
-                          defaultValue={description}
-                          name="description"
-                          rows={2}
-                        />
-                        <button className="w-fit rounded bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700" type="submit">
-                          Save
-                        </button>
-                      </form>
-
-                      <form action={deleteImage}>
-                        <input name="id" type="hidden" value={imageId} />
-                        <button className="rounded bg-rose-700 px-3 py-1 text-xs font-semibold text-white hover:bg-rose-800" type="submit">
-                          Delete
-                        </button>
-                      </form>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-xl font-semibold">Captions</h2>
-        <p className="mb-3 text-slate-600">Read-only list of all captions in the captions table.</p>
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full bg-white text-sm">
-            <thead className="bg-slate-100 text-left text-slate-700">
-              <tr>
-                {captionColumns.map((column) => (
-                  <th key={column} className="px-3 py-2">
-                    {column}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {captionRows.map((caption, index) => (
-                <tr key={asText(caption.id) || index} className="border-t border-slate-200">
-                  {captionColumns.map((column) => (
-                    <td key={`${asText(caption.id)}-${column}`} className="max-w-[350px] px-3 py-2 align-top">
-                      <div className="truncate" title={asText(caption[column])}>
-                        {asText(caption[column])}
-                      </div>
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </main>
+                    <div className="p-4">
+                      <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Caption</p>
+                      <p className="line-clamp-3 text-sm font-bold text-slate-900">{caption.content || 'Untitled caption'}</p>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   )
 }
