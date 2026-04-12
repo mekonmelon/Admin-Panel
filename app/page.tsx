@@ -29,6 +29,8 @@ type TableConfig = {
   key: string
   label: string
   sortColumn?: 'created_datetime_utc'
+  fetchAll?: boolean
+  orderBy?: { column: string; ascending?: boolean }[]
 }
 
 type NavItem = {
@@ -45,8 +47,22 @@ type NavGroup = {
 const TABLES: Record<string, TableConfig> = {
   profiles: { key: 'profiles', label: 'profiles', sortColumn: 'created_datetime_utc' },
   images: { key: 'images', label: 'images', sortColumn: 'created_datetime_utc' },
-  humorFlavors: { key: 'humor_flavors', label: 'humor_flavors' },
-  humorFlavorSteps: { key: 'humor_flavor_steps', label: 'humor_flavor_steps' },
+  humorFlavors: {
+  key: 'humor_flavors',
+  label: 'humor_flavors',
+  fetchAll: true,
+  orderBy: [{ column: 'id', ascending: true }]
+},
+humorFlavorSteps: {
+  key: 'humor_flavor_steps',
+  label: 'humor_flavor_steps',
+  fetchAll: true,
+  orderBy: [
+    { column: 'humor_flavor_id', ascending: true },
+    { column: 'order_by', ascending: true },
+    { column: 'id', ascending: true }
+  ]
+},
   humorFlavorMix: { key: 'humor_flavor_mix', label: 'humor_flavor_mix', sortColumn: 'created_datetime_utc' },
   terms: { key: 'terms', label: 'terms', sortColumn: 'created_datetime_utc' },
   captions: { key: 'captions', label: 'captions', sortColumn: 'created_datetime_utc' },
@@ -420,23 +436,32 @@ export default async function Home({
   const selectedView = isViewValid(selectedViewParam) ? selectedViewParam : 'dashboard'
 
   const fetchTable = async (config: TableConfig): Promise<TableResult> => {
-    try {
-      let query = supabase.from(config.key).select('*').limit(50)
-      if (config.sortColumn) {
-        query = query.order(config.sortColumn, { ascending: false })
-      }
+  try {
+    let query = supabase.from(config.key).select('*')
 
-      const { data, error } = await query
-      if (error) return { rows: [], error: error.message, resolvedTable: config.key }
-      return { rows: (data ?? []) as GenericRow[], error: null, resolvedTable: config.key }
-    } catch (error) {
-      return {
-        rows: [],
-        error: error instanceof Error ? error.message : `Unknown fetch error for ${config.key}`,
-        resolvedTable: config.key
+    if (config.orderBy?.length) {
+      for (const order of config.orderBy) {
+        query = query.order(order.column, { ascending: order.ascending ?? true })
       }
+    } else if (config.sortColumn) {
+      query = query.order(config.sortColumn, { ascending: false })
+    }
+
+    if (!config.fetchAll) {
+      query = query.limit(50)
+    }
+
+    const { data, error } = await query
+    if (error) return { rows: [], error: error.message, resolvedTable: config.key }
+    return { rows: (data ?? []) as GenericRow[], error: null, resolvedTable: config.key }
+  } catch (error) {
+    return {
+      rows: [],
+      error: error instanceof Error ? error.message : `Unknown fetch error for ${config.key}`,
+      resolvedTable: config.key
     }
   }
+}
 
   const settled = await Promise.allSettled([
     fetchTable(TABLES.profiles),
