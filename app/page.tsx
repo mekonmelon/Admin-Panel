@@ -144,6 +144,42 @@ function getChartDay(date: Date) {
   return date.toLocaleDateString('en-US', { weekday: 'short' })
 }
 
+function stripAuditFields(row: GenericRow) {
+  const next = { ...row }
+  delete next.id
+  delete next.created_datetime_utc
+  delete next.modified_datetime_utc
+  return next
+}
+
+function getFlavorNameField(row: GenericRow) {
+  const candidates = ['slug', 'name', 'title', 'label', 'description']
+  return candidates.find((key) => key in row) ?? 'description'
+}
+
+function buildDuplicateFlavorName(existingRows: GenericRow[], sourceRow: GenericRow) {
+  const nameField = getFlavorNameField(sourceRow)
+  const rawBase = asText(sourceRow[nameField]).trim() || `flavor-${getRowId(sourceRow)}`
+  const normalizedBase = rawBase.replace(/\s*\(copy\s*\d*\)$/i, '').replace(/-copy-\d+$/i, '').replace(/-copy$/i, '').trim()
+  const existingNames = new Set(
+    existingRows
+      .map((row) => asText(row[nameField]).trim().toLowerCase())
+      .filter(Boolean)
+  )
+
+  const firstCandidate = `${normalizedBase} (Copy)`
+  if (!existingNames.has(firstCandidate.toLowerCase())) {
+    return { nameField, value: firstCandidate }
+  }
+
+  let index = 2
+  while (existingNames.has(`${normalizedBase} (Copy ${index})`.toLowerCase())) {
+    index += 1
+  }
+
+  return { nameField, value: `${normalizedBase} (Copy ${index})` }
+}
+
 function isViewValid(view: string) {
   return NAV_GROUPS.some((group) => group.items.some((item) => item.id === view))
 }
@@ -297,6 +333,59 @@ async function deleteTerm(formData: FormData) {
   const id = String(formData.get('id') ?? '').trim()
   if (!id) return
   await supabase.from(TABLES.terms.key).delete().eq('id', id)
+  revalidatePath('/')
+}
+
+async function duplicateHumorFlavor(formData: FormData) {
+  'use server'
+  const supabase = createClient()
+  const sourceId = String(formData.get('id') ?? '').trim()
+  if (!sourceId) return
+
+  const { data: sourceFlavor, error: sourceFlavorError } = await supabase
+    .from(TABLES.humorFlavors.key)
+    .select('*')
+    .eq('id', sourceId)
+    .single()
+
+  if (sourceFlavorError || !sourceFlavor) return
+
+  const { data: allFlavors } = await supabase.from(TABLES.humorFlavors.key).select('*')
+  const existingFlavorRows = (allFlavors ?? []) as GenericRow[]
+  const duplicateName = buildDuplicateFlavorName(existingFlavorRows, sourceFlavor as GenericRow)
+
+  const newFlavorPayload: GenericRow = {
+    ...stripAuditFields(sourceFlavor as GenericRow),
+    [duplicateName.nameField]: duplicateName.value,
+    created_datetime_utc: new Date().toISOString(),
+    modified_datetime_utc: new Date().toISOString()
+  }
+
+  const { data: insertedFlavor, error: insertFlavorError } = await supabase
+    .from(TABLES.humorFlavors.key)
+    .insert(newFlavorPayload)
+    .select('*')
+    .single()
+
+  if (insertFlavorError || !insertedFlavor) return
+
+  const { data: relatedSteps } = await supabase
+    .from(TABLES.humorFlavorSteps.key)
+    .select('*')
+    .eq('humor_flavor_id', sourceId)
+    .order('order_by', { ascending: true })
+
+  const stepRows = ((relatedSteps ?? []) as GenericRow[]).map((step) => ({
+    ...stripAuditFields(step),
+    humor_flavor_id: insertedFlavor.id,
+    created_datetime_utc: new Date().toISOString(),
+    modified_datetime_utc: new Date().toISOString()
+  }))
+
+  if (stepRows.length) {
+    await supabase.from(TABLES.humorFlavorSteps.key).insert(stepRows)
+  }
+
   revalidatePath('/')
 }
 
@@ -810,7 +899,9 @@ export default async function Home({
             {selectedView === 'images' ? <ImagesSection createImageRow={createImageRow} deleteImageRow={deleteImageRow} rows={images.rows} updateImageRow={updateImageRow} /> : null}
             {selectedView === 'captions' ? <CaptionsSection rows={captions.rows} voteScores={votesByCaption} /> : null}
             {selectedView === 'caption-requests' ? <CaptionRequestsSection rows={captionRequests.rows} /> : null}
-            {selectedView === 'flavors' || selectedView === 'flavor-steps' ? <FlavorsSection flavors={humorFlavors.rows} steps={humorFlavorSteps.rows} /> : null}
+            {selectedView === 'flavors' || selectedView === 'flavor-steps' ? (
+              <FlavorsSection flavors={humorFlavors.rows} steps={humorFlavorSteps.rows} duplicateFlavor={duplicateHumorFlavor} />
+            ) : null}
             {selectedView === 'humor-mix' ? <HumorMixSection rows={humorFlavorMix.rows} updateHumorMixRow={updateHumorMixRow} /> : null}
             {selectedView === 'caption-examples' ? <CaptionExamplesSection rows={captionExamples.rows} /> : null}
             {selectedView === 'terms' ? <TermsSection createTerm={createTerm} deleteTerm={deleteTerm} rows={terms.rows} updateTerm={updateTerm} /> : null}
